@@ -19,7 +19,7 @@ The repository includes a Dockerfile and a simple Node.js server for generating 
 6. Updating Services
    Modify the Docker Compose file to update the image with the second healthy image, then run the update script again.
    > ./update.sh
-8. Deploying an Unsuccessful Change
+7. Deploying an Unsuccessful Change
    Update the Docker Compose file with the unhealthy image and run the update script again.
    > ./update.sh
 
