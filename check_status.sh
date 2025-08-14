@@ -10,9 +10,11 @@
  # Function to get all container IDs for a service sorted by creation time (oldest first)
  get_all_containers_sorted_by_age() {
      local service=$1
-     docker ps --filter "label=com.docker.compose.service=${service}" -q | xargs docker inspect --format '{{.Created}} {{.Id}}' | sort | awk '{print $2}'
-}
-
+    docker ps --filter "label=com.docker.compose.service=${service}" -q \
+        | xargs -r docker inspect --format '{{.Created}} {{.Id}}' \
+        | sort \
+        | awk '{print $2}'
+    }
 stop_and_remove_container() {
     local container=$1
     docker stop "${container}"
