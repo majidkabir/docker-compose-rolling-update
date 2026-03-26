@@ -41,7 +41,9 @@ Smart scaling + health checks + container removal:
 1. ✓ Services must have `healthcheck` in Dockerfile
 2. ✓ Services must have `healthcheck` in docker-compose.yaml
 3. ✓ Health check command must work (curl, wget, etc.)
-4. ✓ Load balancer must route to both service instances
+4. ✓ Load balancer must route to both service instances during transition
+5. ✓ Services must handle `SIGTERM` gracefully — finish in-flight requests before exiting
+6. ✓ Nginx must use Docker's DNS resolver (`127.0.0.11`) with a variable in `proxy_pass` — static upstream blocks cache IPs and won't pick up new containers
 
 ## For Troubleshooting
 
@@ -73,25 +75,27 @@ docker events  # Real-time events
 ```bash
 cd example/
 
-# 1. Build the services
+# 1. Build version 1
 docker build -t service:v1 .
 
-# 2. Start them
+# 2. Start services (docker-compose.yaml starts with service:v1, VERSION=1)
 docker compose up -d
 
 # 3. Monitor in another terminal
 ./monitor.sh
+# Should see: OK: Hello World v1!
 
-# 4. Create new version
+# 4. Build version 2 (make a visible change in server.js first, e.g. fix a typo)
 docker build -t service:v2 .
-# Edit docker-compose.yaml to use service:v2
+# Edit docker-compose.yaml: set image to service:v2 and VERSION=2 for both services
 
 # 5. Run rolling update
 ../scripts/update.sh service1 service2
 
-# 6. Watch monitor.sh - should see zero downtime!
-#    Responses alternate between v1 and v2, then all v2
+# 6. Watch monitor.sh - responses transition from v1 → mix of v1+v2 → all v2
+#    No HTTP errors or connection failures should appear
 
 # 7. Cleanup
 docker compose down
+docker rmi service:v1 service:v2
 ```
