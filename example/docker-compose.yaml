@@ -1,0 +1,41 @@
+version: '3.8'
+
+services:
+  service1:
+    image: service:v1
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/"]
+      interval: 5s
+      timeout: 2s
+      retries: 3
+      start_period: 5s
+    networks:
+      - app-network
+
+  service2:
+    image: service:v1
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/"]
+      interval: 5s
+      timeout: 2s
+      retries: 3
+      start_period: 5s
+    networks:
+      - app-network
+
+  nginx:
+    container_name: nginx
+    image: nginx:latest
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    ports:
+      - "8182:80"
+    depends_on:
+      - service1
+      - service2
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge
