@@ -26,7 +26,7 @@ This directory contains a complete, working example of zero-downtime rolling upd
 
 ```bash
 # Build version 1
-VERSION=v1 docker build -t service:v1 .
+docker build -t service:v1 .
 
 # Verify build
 docker images | grep service
@@ -74,14 +74,18 @@ docker build -t service:v2 .
 
 ### Update docker-compose.yaml
 
-Change both services to use the new image:
+Change both services to use the new image and bump the VERSION env var:
 
 ```yaml
 services:
   service1:
-    image: service:v2  # Changed from v1
+    image: service:v2
+    environment:
+      - VERSION=2
   service2:
-    image: service:v2  # Changed from v1
+    image: service:v2
+    environment:
+      - VERSION=2
 ```
 
 ### Run the Rolling Update Script
@@ -160,18 +164,45 @@ HEALTHCHECK --interval=5s --timeout=2s --retries=3 --start-period=5s \
 
 Both must be defined for Docker to monitor container health.
 
-### Load Balancing
+### Load Balancing & Dynamic DNS
 
-Nginx upstream block distributes requests:
+Nginx uses Docker's embedded DNS resolver so it picks up container changes within 1 second instead of caching IPs forever:
 
 ```nginx
-upstream backend {
-    server service1:3000;
-    server service2:3000;
+resolver 127.0.0.11 valid=1s ipv6=off;
+
+location / {
+    # Variable forces per-request DNS re-resolution
+    set $upstream service1:3000;
+    proxy_pass http://$upstream;
+
+    proxy_connect_timeout 500ms;
+    proxy_next_upstream error timeout;
+    proxy_next_upstream_tries 3;
+    proxy_next_upstream_timeout 2s;
 }
 ```
 
-This ensures both services receive traffic.
+Key points:
+- **`resolver 127.0.0.11`** — Docker's embedded DNS, always available inside containers
+- **`valid=1s`** — Nginx re-queries DNS every second so a removed container is forgotten quickly
+- **Variable in `proxy_pass`** — required to activate the resolver on each request; a static `upstream {}` block ignores the resolver and caches IPs at startup
+- **`proxy_next_upstream error timeout`** — if the old container's port is gone, Nginx retries the next resolved IP immediately instead of returning an error to the client
+
+### Graceful Shutdown
+
+Services must handle `SIGTERM` to avoid dropping the request being processed at the moment `docker stop` runs. The example server closes idle keep-alive connections immediately (so Nginx's connection pool is cleared) and waits for any active request to finish before exiting:
+
+```js
+process.on('SIGTERM', () => {
+  server.closeIdleConnections(); // clear Nginx's keep-alive pool instantly
+  server.close(() => {           // wait for in-flight request to finish
+    process.exit(0);
+  });
+});
+```
+
+Without `closeIdleConnections()`, Nginx may reuse a stale keep-alive connection to the stopping container and receive a TCP reset, which reaches the client as `HTTP 000`.
 
 ### Service Scaling
 

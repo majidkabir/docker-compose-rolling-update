@@ -3,6 +3,8 @@ version: '3.8'
 services:
   service1:
     image: service:v1
+    environment:
+      - VERSION=1
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3000/"]
       interval: 5s
@@ -14,6 +16,8 @@ services:
 
   service2:
     image: service:v1
+    environment:
+      - VERSION=1
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3000/"]
       interval: 5s
