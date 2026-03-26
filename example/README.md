@@ -4,17 +4,19 @@ This directory contains a complete, working example of zero-downtime rolling upd
 
 ## What This Example Shows
 
-- **Node.js Server**: Simple HTTP server that responds with its version
-- **Nginx**: Acts as load balancer routing to both services
-- **Health Checks**: Both services report their health status
-- **Monitoring**: Script to watch requests during updates
+`service1` and `service2` are **two independent microservices** — they share the same Node.js image here for simplicity, but in a real system they would be completely different applications. Having two services in the example demonstrates that the update script can roll out a new version to **multiple independent services in one command**, updating each one sequentially with zero downtime.
+
+- **Node.js Server**: Simple HTTP server; each service reports its own version
+- **Nginx**: Reverse proxy in front of `service1` — `service2` represents an independent backend (internal API, worker, etc.) that is not exposed directly through nginx in this example
+- **Health Checks**: Both services report their health status independently
+- **Monitoring**: Script to watch requests to `service1` during updates
 
 ## Files
 
 - `docker-compose.yaml` - Service definitions with health checks
 - `Dockerfile` - Node.js server with curl for health checks
 - `server.js` - Simple version-aware HTTP server
-- `nginx/nginx.conf` - Nginx configuration with upstream load balancing
+- `nginx/nginx.conf` - Nginx reverse proxy configuration for `service1`
 - `monitor.sh` - Real-time monitoring of requests
 
 ## Prerequisites
@@ -91,15 +93,19 @@ services:
 ### Run the Rolling Update Script
 
 ```bash
-# From the example directory
+# From the example directory — updates service1 first, then service2 independently
 ../scripts/update.sh service1 service2
 
 # Watch the monitor.sh output for zero-downtime behavior
 ```
 
-Expected behavior:
-- ✓ All requests continue to succeed
-- ✓ Responses might alternate between v1 and v2 (both alive temporarily)
+The script updates each service independently and sequentially:
+1. `service1` is scaled to 2 containers (old + new), new one is health-checked, old one removed
+2. `service2` goes through the same process
+
+Expected behavior in `monitor.sh`:
+- ✓ All requests continue to succeed throughout
+- ✓ Responses may briefly alternate between v1 and v2 while both `service1` containers are alive
 - ✓ Eventually all responses show v2
 
 ## Step 5: Test Unhealthy Container Handling
@@ -206,13 +212,23 @@ Without `closeIdleConnections()`, Nginx may reuse a stale keep-alive connection 
 
 ### Service Scaling
 
-During updates, services are temporarily scaled to 2:
+Each independent service is temporarily scaled to 2 during its update window:
 
 ```bash
+# Step 1: scale service1 to 2 (old instance stays alive)
 docker compose up -d --scale service1=2 --no-recreate
-# Now running: (old service1) + (new service1)
-# After health check passes: old service1 is removed
+# Running: service1 (v1, old) + service1 (v2, new) + service2 (v1, untouched)
+
+# Step 2: once service1's new container is healthy, old one is removed
+# Running: service1 (v2) + service2 (v1, untouched)
+
+# Step 3: repeat for service2
+docker compose up -d --scale service2=2 --no-recreate
+# Running: service1 (v2) + service2 (v1, old) + service2 (v2, new)
+# After health check: service1 (v2) + service2 (v2)
 ```
+
+At no point is any service fully down — the old container keeps serving traffic until the new one is confirmed healthy.
 
 ## Troubleshooting
 
