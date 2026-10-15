@@ -1,112 +1,68 @@
-# Quick Reference Guide
+# Quick Reference
 
-## For Developers Using the Scripts
+Command cheat sheet. For setup and explanations, see the [README](README.md).
 
-### Setup (one-time)
+## Install
+
 ```bash
-# Copy scripts to your project (keep them in the same directory)
-cp scripts/update.sh scripts/check_status.sh ./your-project-scripts/
-chmod +x ./your-project-scripts/*.sh
+# Into your project (both scripts in the same directory)
+base=https://github.com/majidkabir/docker-compose-rolling-update/releases/latest/download
+mkdir -p scripts && curl -fsSL -o scripts/update.sh "$base/update.sh" -o scripts/check_status.sh "$base/check_status.sh"
+chmod +x scripts/*.sh
 
-# ...or install as a Docker CLI plugin: docker rollingupdate
-./scripts/install-plugin.sh
+# ...or as a Docker CLI plugin, from a clone of this repo
+./scripts/install-plugin.sh          # then: docker rollingupdate ...
 ```
 
-### Update Services
+## Update
+
 ```bash
-# Update service1, then service2
-./scripts/update.sh service1 service2
-
-# Update only one service
-./scripts/update.sh service1
-
-# Other compose file / project, 5 min health timeout
-./scripts/update.sh -f prod.yaml -p shop -t 300 service1
+./scripts/update.sh api                        # one service
+./scripts/update.sh api worker                 # several, one after another
+API_TAG=1.5.0 ./scripts/update.sh api          # new tag via a compose variable
+./scripts/update.sh --pull always api          # re-pushed tag (e.g. :latest)
+docker compose build api && ./scripts/update.sh api   # local build
+./scripts/update.sh -f prod.yaml -p shop -t 300 api   # other file/project, 5 min timeout
 ```
 
-### What Happens During Update
-1. New container(s) start next to the old ones (N replicas → 2N)
-2. Script waits until every new container is `healthy` (default timeout 120s)
-3. Once healthy, the old containers are stopped and removed
-4. Repeat for the next service
+| Exit code | Meaning |
+|---|---|
+| `0` | Updated |
+| `1` | Failed — new containers removed, old ones still serving |
+| `64` | Usage error (unknown option or service) |
+| `130` / `143` | Interrupted — rolled back |
 
-If a new container is unhealthy, crashes, has no healthcheck, or times out,
-the new containers are removed and the old ones keep running (rollback).
+## Checklist for a service
 
-## For Understanding the Project
+- [ ] Healthcheck defined (compose `healthcheck:` or Dockerfile `HEALTHCHECK`)
+- [ ] Healthcheck command exists in the image (`curl`, `wget`, `node`, ...)
+- [ ] No fixed host `ports:` and no `container_name` (two copies run briefly)
+- [ ] Handles `SIGTERM` and finishes in-flight requests within `stop_grace_period`
+- [ ] Proxy re-resolves DNS — Nginx: `resolver 127.0.0.11 valid=1s` + variable in `proxy_pass` + `proxy_next_upstream error timeout`
 
-### The Problem
-Docker Compose doesn't have built-in rolling updates (unlike Docker Swarm/Kubernetes).
-We need zero-downtime updates so users don't experience service interruptions.
+## Debug
 
-### The Solution
-Smart scaling + health checks + container removal:
-- Scale service to 2x its replicas temporarily
-- Health check ensures the new one is working
-- Only then remove the old one
-- Nginx load balances between them
-
-### Key Requirements
-1. ✓ Services must have a healthcheck (docker-compose.yaml or Dockerfile — one is enough)
-2. ✓ The health check command must exist in the container (curl, wget, node, etc.)
-3. ✓ No fixed host `ports:` or `container_name` on updated services (two copies run briefly)
-4. ✓ Load balancer must route to both service instances during transition
-5. ✓ Services must handle `SIGTERM` gracefully — finish in-flight requests before exiting
-6. ✓ Nginx must use Docker's DNS resolver (`127.0.0.11`) with a variable in `proxy_pass` — static upstream blocks cache IPs and won't pick up new containers
-
-## For Troubleshooting
-
-### Check container health
 ```bash
-docker ps --format "table {{.Names}}\t{{.Status}}"
-docker inspect <container-id> | grep -A 20 '"Health"'
+docker compose ps                                        # containers and health
+docker inspect --format '{{json .State.Health}}' <id>    # health-check history
+docker compose logs <service>                            # logs of all its containers
+./scripts/check_status.sh -t 30 <id>                     # wait for healthy: exit 0 / 1 / 2
+docker compose config --images                           # image tags Compose resolves
+docker compose rm -f <service>                           # remove stopped leftovers
 ```
 
-### Check logs
-```bash
-docker compose logs service1   # all containers of a service
-docker logs nginx
-```
-
-### Manual health check
-```bash
-./scripts/check_status.sh -t 30 <container-id>   # waits for healthy, exit 0/1/2
-```
-
-### See what's happening
-```bash
-docker stats  # Real-time container stats
-docker events  # Real-time events
-```
-
-## Example Workflow
+## Try the example
 
 ```bash
 cd example/
-
-# 1. Build version 1
 docker build -t service:v1 .
-
-# 2. Start services (image tag and VERSION default to 1)
 docker compose up -d --wait
+./monitor.sh                                             # in a second terminal
 
-# 3. Monitor in another terminal
-./monitor.sh
-# Should see: OK: Hello World v1!
-
-# 4. Build version 2
 docker build --build-arg VERSION=2 -t service:v2 .
+VERSION=2 ../scripts/update.sh service1 service2         # v1 → v2, no failed requests
+BROKEN=1 VERSION=2 ../scripts/update.sh service1         # broken release: rolled back
 
-# 5. Run rolling update (VERSION=2 selects service:v2)
-VERSION=2 ../scripts/update.sh service1 service2
-
-# 6. Watch monitor.sh - responses transition from v1 → mix of v1+v2 → all v2
-#    No HTTP errors or connection failures should appear
-
-# 7. Try a broken release: it is rolled back, v2 keeps serving
-BROKEN=1 VERSION=2 ../scripts/update.sh service1
-
-# 8. Cleanup
-docker compose down
-docker rmi service:v1 service:v2
+docker compose down && docker rmi service:v1 service:v2
+./e2e-test.sh                                            # or run all of the above automatically
 ```

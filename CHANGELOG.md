@@ -43,9 +43,15 @@ First tagged release. Compared with the earlier untagged scripts:
 
 ### Changed
 
-- Example: VERSION env selects the image tag, single node-based healthcheck,
-  `stop_grace_period`, forced-exit timer and SIGINT handling in `server.js`,
-  non-root image, pinned nginx, `.dockerignore`, `BROKEN=1` rollback demo.
+- Example: VERSION env selects the image tag and `--build-arg VERSION` sets the
+  version the image reports, `pull_policy: never` for the local images, single
+  node-based healthcheck, `stop_grace_period`, forced-exit timer and SIGINT
+  handling in `server.js`, non-root image, pinned nginx, `.dockerignore`,
+  `BROKEN=1` rollback demo.
+- Docs rewritten: install via release download or plugin, how a new image gets
+  picked up (new tag, `--pull always`, local build), deploy-pipeline usage,
+  limitations; QUICKSTART is now a command cheat sheet; example walkthrough
+  fixed to build inside `example/`.
 
 [Unreleased]: https://github.com/majidkabir/docker-compose-rolling-update/compare/v1.0.0...HEAD
 [1.0.0]: https://github.com/majidkabir/docker-compose-rolling-update/releases/tag/v1.0.0
