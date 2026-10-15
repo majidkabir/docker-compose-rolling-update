@@ -16,12 +16,13 @@ PROJECT="rolling-update-e2e"
 export COMPOSE_PROJECT_NAME="$PROJECT"
 
 LOG="$(mktemp)"
+UPDATE_LOG="$(mktemp)"
 MONITOR_PID=""
 
 cleanup() {
     if [ -n "$MONITOR_PID" ]; then kill "$MONITOR_PID" 2>/dev/null || true; fi
     docker compose down --remove-orphans >/dev/null 2>&1 || true
-    rm -f "$LOG"
+    rm -f "$LOG" "$UPDATE_LOG"
 }
 trap cleanup EXIT
 
@@ -43,11 +44,16 @@ fail() {
 }
 
 on_error() {
-    annotate "Command failed (exit $1) at line $2: $3"$'\n'"$(docker compose ps -a 2>&1)"$'\n'"$(docker compose logs --tail 20 2>&1 | tail -n 40)"
+    annotate "Command failed (exit $1) at line $2: $3"$'\n'"--- update.sh output ---"$'\n'"$(tail -n 25 "$UPDATE_LOG")"$'\n'"--- containers ---"$'\n'"$(docker compose ps -a 2>&1)"
 }
 trap 'on_error $? $LINENO "$BASH_COMMAND"' ERR
 
 step() { echo ""; echo "=== $* ==="; }
+
+# Runs update.sh, keeping its output for failure reports.
+run_update() {
+    "$UPDATE" "$@" 2>&1 | tee -a "$UPDATE_LOG"
+}
 
 running_count() {
     docker compose ps -q --status running "$1" | grep -c . || true
@@ -66,10 +72,10 @@ sleep 2
 grep -q "OK: Hello World v1" "$LOG" || fail "v1 is not serving through nginx"
 
 step "Rolling update to v2"
-VERSION=2 "$UPDATE" service1 service2
+VERSION=2 run_update service1 service2
 
 step "Broken release must be rolled back"
-if BROKEN=1 VERSION=2 "$UPDATE" service1; then rc=0; else rc=$?; fi
+if BROKEN=1 VERSION=2 run_update service1; then rc=0; else rc=$?; fi
 [ "$rc" -eq 1 ] || fail "broken release exited with $rc, expected 1"
 
 sleep 2
