@@ -1,232 +1,102 @@
 # Zero-Downtime Rolling Update Example
 
-This directory contains a complete, working example of zero-downtime rolling updates with Docker Compose.
+A runnable demo: update two services from v1 to v2 while a monitor sends requests, and watch none of them fail. Then try a broken release and watch it get rolled back.
 
-## What This Example Shows
+## What's Inside
 
-`service1` and `service2` are **two independent microservices** — they share the same Node.js image here for simplicity, but in a real system they would be completely different applications. Having two services in the example demonstrates that the update script can roll out a new version to **multiple independent services in one command**, updating each one sequentially with zero downtime.
-
-- **Node.js Server**: Simple HTTP server; each service reports its own version
-- **Nginx**: Reverse proxy in front of `service1` — `service2` represents an independent backend (internal API, worker, etc.) that is not exposed directly through nginx in this example
-- **Health Checks**: Both services report their health status independently
-- **Monitoring**: Script to watch requests to `service1` during updates
-
-## Files
-
-- `docker-compose.yaml` - Service definitions with health checks; `VERSION` selects the image tag
-- `Dockerfile` - Node.js server running as the unprivileged `node` user
-- `server.js` - Simple version-aware HTTP server with graceful shutdown
-- `nginx/nginx.conf` - Nginx reverse proxy configuration for `service1`
-- `monitor.sh` - Real-time monitoring of requests
-- `e2e-test.sh` - Runs the whole walkthrough automatically and fails on any dropped request (used by CI)
-
-## Prerequisites
-
-- Docker & Docker Compose
-- curl (for monitoring)
-
-## Step 1: Build the Docker Images
-
-```bash
-# Build version 1
-docker build -t service:v1 .
-
-# Verify build
-docker images | grep service
+```
+:8182 → nginx → service1      (monitored by monitor.sh)
+                service2      (independent backend, not behind nginx)
 ```
 
-## Step 2: Start Services
+`service1` and `service2` stand for two independent microservices. They share one Node.js image here for simplicity; having two shows that one command can update several services, one after another.
+
+| File | Purpose |
+|---|---|
+| `docker-compose.yaml` | Both services, healthchecks, nginx. `VERSION` picks the image tag |
+| `Dockerfile` | Node.js server; `--build-arg VERSION=N` sets the version it reports |
+| `server.js` | HTTP server with graceful shutdown; `BROKEN=1` makes it crash on start |
+| `nginx/nginx.conf` | Proxy that re-resolves Docker DNS and retries on errors |
+| `monitor.sh` | Sends a request every 0.1s and prints the result |
+| `e2e-test.sh` | Runs this whole walkthrough automatically (used by CI) |
+
+**You need:** Docker with Compose v2, `curl`, and port 8182 free. Run every command from this `example/` directory.
+
+## 1. Start v1
 
 ```bash
 cd example/
+docker build -t service:v1 .
 docker compose up -d --wait
-
-# Check status
-docker compose ps
 ```
 
-Wait a few seconds for health checks to pass.
+`--wait` returns once the services are healthy.
 
-## Step 3: Monitor in Real-Time
+## 2. Watch the traffic
 
-In a new terminal, run:
+In a second terminal (also in `example/`):
 
 ```bash
 ./monitor.sh
-
-# Output:
-# 2024-03-18 10:15:20 - OK: Hello World v1!
-# 2024-03-18 10:15:20 - OK: Hello World v1!
-# 2024-03-18 10:15:20 - OK: Hello World v1!
 ```
 
-The monitor script continuously sends requests and shows:
-- ✓ Successful responses with version
-- ✗ Failed requests (should not happen during rolling update)
+```
+2026-10-15 10:15:20 - OK: Hello World v1!
+2026-10-15 10:15:20 - OK: Hello World v1!
+```
 
-## Step 4: Perform a Rolling Update
+Failures show up as `HTTP 502` (or another status) or `Request failed (connection error)`. There shouldn't be any during the whole walkthrough.
 
-### Create Version 2 Image
+## 3. Roll out v2
 
 ```bash
 docker build --build-arg VERSION=2 -t service:v2 .
-```
-
-The build arg is baked into the image, so `service:v2` reports v2. The compose file picks the image tag from the `VERSION` variable (`service:v${VERSION}`), so there is nothing to edit.
-
-### Run the Rolling Update Script
-
-```bash
-# From the example directory — updates service1 first, then service2 independently
 VERSION=2 ../scripts/update.sh service1 service2
-
-# Watch the monitor.sh output for zero-downtime behavior
 ```
 
-The script updates each service independently and sequentially:
-1. `service1` is scaled to 2 containers (old + new), the new one must report `healthy`, then the old one is removed
-2. `service2` goes through the same process
+`VERSION=2` makes the compose file resolve `service:v2`; nothing needs editing. The script updates `service1`, then `service2`. In the monitor, responses switch from v1 to v2 — briefly mixed while both `service1` containers run — with no failures.
 
-Expected behavior in `monitor.sh`:
-- ✓ All requests continue to succeed throughout
-- ✓ Responses may briefly alternate between v1 and v2 while both `service1` containers are alive
-- ✓ Eventually all responses show v2
-
-## Step 5: Test a Broken Release
-
-`BROKEN=1` makes the new container crash on startup, like a bad release would:
+## 4. Try a broken release
 
 ```bash
 BROKEN=1 VERSION=2 ../scripts/update.sh service1
 ```
 
-The script will:
-1. Detect that the new container is not running (an `unhealthy` one is caught the same way)
-2. Roll back by removing it
-3. Exit with code 1 — the old container never stopped, so `monitor.sh` shows no errors
+The new container crashes on startup, so the script removes it and exits with code `1`. The running container was never touched, so the monitor keeps showing `OK`. Unhealthy containers, containers without a healthcheck, and containers still starting after `--timeout` are rolled back the same way.
 
-Containers without a healthcheck, or that stay `starting` past `--timeout`, are rolled back too.
-
-## Monitoring Output Explanation
-
-```
-2024-03-18 10:15:20 - OK: Hello World v1!         ← Request succeeded
-2024-03-18 10:15:20 - HTTP 500                     ← Server error
-2024-03-18 10:15:20 - Request failed               ← Connection timeout
-```
-
-During a successful rolling update, you should see **no failures**.
-
-## Cleanup
+## 5. Clean up
 
 ```bash
 docker compose down
-docker rmi service:v1 service:v2 2>/dev/null
+docker rmi service:v1 service:v2
 ```
 
-## Key Concepts
-
-### Health Checks
-
-The health check is defined once, in `docker-compose.yaml`. It uses `node` itself, so the image doesn't need `curl`:
-
-```yaml
-healthcheck:
-  test:
-    - CMD
-    - node
-    - -e
-    - "require('http').get('http://localhost:3000/', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"
-  interval: 5s
-  timeout: 2s
-  retries: 3
-  start_period: 5s
-```
-
-A `HEALTHCHECK` in the Dockerfile works just as well — one of the two is enough.
-
-### Load Balancing & Dynamic DNS
-
-Nginx uses Docker's embedded DNS resolver so it picks up container changes within 1 second instead of caching IPs forever:
-
-```nginx
-resolver 127.0.0.11 valid=1s ipv6=off;
-
-location / {
-    # Variable forces per-request DNS re-resolution
-    set $upstream service1:3000;
-    proxy_pass http://$upstream;
-
-    proxy_connect_timeout 500ms;
-    proxy_next_upstream error timeout;
-    proxy_next_upstream_tries 3;
-    proxy_next_upstream_timeout 2s;
-}
-```
-
-Key points:
-- **`resolver 127.0.0.11`** — Docker's embedded DNS, always available inside containers
-- **`valid=1s`** — Nginx re-queries DNS every second so a removed container is forgotten quickly
-- **Variable in `proxy_pass`** — required to activate the resolver on each request; a static `upstream {}` block ignores the resolver and caches IPs at startup
-- **`proxy_next_upstream error timeout`** — if the old container's port is gone, Nginx retries the next resolved IP immediately instead of returning an error to the client
-
-### Graceful Shutdown
-
-Services must handle `SIGTERM` to avoid dropping the request being processed at the moment `docker stop` runs. The example server closes idle keep-alive connections immediately (so Nginx's connection pool is cleared) and waits for any active request to finish before exiting:
-
-```js
-process.on('SIGTERM', () => {
-  server.closeIdleConnections(); // clear Nginx's keep-alive pool instantly
-  server.close(() => {           // wait for in-flight request to finish
-    process.exit(0);
-  });
-  setTimeout(() => process.exit(1), 10000).unref(); // don't hang forever
-});
-```
-
-Without `closeIdleConnections()`, Nginx may reuse a stale keep-alive connection to the stopping container and receive a TCP reset, which reaches the client as `HTTP 000`.
-
-The forced-exit timer (10s) is shorter than the service's `stop_grace_period` (15s), so the app exits on its own terms before Docker sends SIGKILL.
-
-### Service Scaling
-
-Each independent service is temporarily scaled to 2 during its update window:
+## Run It Automatically
 
 ```bash
-# Step 1: scale service1 to 2 (old instance stays alive)
-docker compose up -d --no-deps --no-recreate --scale service1=2 service1
-# Running: service1 (v1, old) + service1 (v2, new) + service2 (v1, untouched)
-
-# Step 2: once service1's new container is healthy, old one is removed
-# Running: service1 (v2) + service2 (v1, untouched)
-
-# Step 3: repeat for service2
-docker compose up -d --no-deps --no-recreate --scale service2=2 service2
-# Running: service1 (v2) + service2 (v1, old) + service2 (v2, new)
-# After health check: service1 (v2) + service2 (v2)
+./e2e-test.sh
 ```
 
-At no point is any service fully down — the old container keeps serving traffic until the new one is confirmed healthy.
+Steps 1–4 in one go. It fails if any request fails, the broken release is accepted, or the end state isn't one running container per service serving v2. It cleans up after itself (the images stay). Stop a stack you started by hand first (`docker compose down`): the test needs port 8182 and the `nginx` container name.
+
+## How the Pieces Fit
+
+**Healthcheck** — defined once in `docker-compose.yaml`, using `node` so the image needs no `curl`. The script waits for `healthy` before removing anything.
+
+**Nginx** — `resolver 127.0.0.11 valid=1s` plus a variable in `proxy_pass` makes it look up `service1` again every second, so it sees new containers and forgets removed ones. `proxy_next_upstream error timeout` retries the other container when one disappears mid-request, so the client never notices.
+
+**Graceful shutdown** — on `SIGTERM`, `server.js` closes idle keep-alive connections right away (so Nginx doesn't reuse one and get a reset), lets active requests finish, and forces an exit after 10s. That's shorter than the 15s `stop_grace_period`, so Docker never has to kill it mid-request.
+
+**nginx itself** — it publishes port 8182 and has a `container_name`, so it can't run two copies and isn't updated with the script. After changing `nginx.conf`, reload it with `docker exec nginx nginx -s reload`.
 
 ## Troubleshooting
 
-**Health check reports unhealthy**:
-- The update script prints the last health-check output
-- Check the server is listening: `docker compose logs service1`
+**`No such image: service:v2`** — the image for that `VERSION` isn't built yet; run the matching `docker build` first.
 
-**Nginx returns 502 Bad Gateway**:
-- Check service DNS resolution: `docker exec nginx getent hosts service1`
-- Verify services are on same network
+**Port 8182 already in use** — change `"8182:80"` in `docker-compose.yaml` and pass the new URL to `./monitor.sh http://localhost:<port>`.
 
-**Old version still responding**:
-- Check how many containers are running: `docker compose ps`
-- Monitor with `docker stats` to see which containers have traffic
+**Nginx returns 502** — check that Docker DNS sees the service: `docker exec nginx getent hosts service1`.
 
-## Next Steps
+**Health check stays unhealthy** — the script prints the last health-check output; `docker compose logs service1` shows the server's own logs.
 
-- Customize this example for your own services
-- Adjust health check parameters for your application
-- Add additional monitoring or logging
-- Integrate into your CI/CD pipeline
-
-For the generic rolling update scripts, see [../README.md](../README.md)
+See the [main README](../README.md) for using the scripts in your own project.
