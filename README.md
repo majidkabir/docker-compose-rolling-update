@@ -16,7 +16,7 @@ This project fills that gap with a simple bash script approach:
 - **No orchestrator required** — works with plain Docker Compose on any machine or VM
 - **No external dependencies** — pure bash + Docker CLI
 - **Safe by default** — health-check gating, automatic rollback on failure, scoped to your Compose project
-- **Drop-in** — copy two scripts into any existing Docker Compose project, or install as `docker rolling-update`
+- **Drop-in** — copy two scripts into any existing Docker Compose project, or install as `docker rollingupdate`
 
 ## How It Works
 
@@ -74,11 +74,11 @@ cp scripts/update.sh scripts/check_status.sh ./scripts/
 chmod +x ./scripts/*.sh
 ```
 
-Or install them once as a Docker CLI plugin, then use `docker rolling-update` anywhere:
+Or install them once as a Docker CLI plugin, then use `docker rollingupdate` anywhere:
 
 ```bash
 ./scripts/install-plugin.sh
-docker rolling-update --help
+docker rollingupdate --help
 ```
 
 ### 2. Configure Your docker-compose.yaml
@@ -166,7 +166,7 @@ Run it from your compose project directory, or point it there with `-f` / `--pro
 ├── scripts/
 │   ├── update.sh          # Main orchestration script (also the CLI plugin)
 │   ├── check_status.sh    # Waits for containers to become healthy
-│   └── install-plugin.sh  # Installs `docker rolling-update`
+│   └── install-plugin.sh  # Installs `docker rollingupdate`
 │
 ├── example/               # Complete working example: Node.js + Nginx
 │   ├── docker-compose.yaml
@@ -238,7 +238,7 @@ Exit codes: `0` all healthy, `1` unhealthy, not running, or timed out, `2` no he
 
 ### `install-plugin.sh`
 
-Links `update.sh` into `~/.docker/cli-plugins/docker-rolling-update` so it runs as `docker rolling-update`. Pass a directory to install somewhere else.
+Installs `update.sh` (and `check_status.sh`) into `~/.docker/cli-plugins` as `docker-rollingupdate`, so it runs as `docker rollingupdate`. `--link` symlinks instead of copying, so the plugin follows your checkout; pass a directory to install somewhere else. (Docker plugin names can't contain dashes, hence `rollingupdate`.)
 
 ## Troubleshooting
 

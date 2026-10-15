@@ -9,13 +9,13 @@
 # If the new containers fail (unhealthy, crash, timeout, no healthcheck), they
 # are removed again and the old containers keep serving traffic.
 #
-# Can also be installed as a Docker CLI plugin ("docker rolling-update"),
+# Can also be installed as a Docker CLI plugin ("docker rollingupdate"),
 # see scripts/install-plugin.sh.
 
 set -euo pipefail
 
-VERSION="1.1.0"
-PLUGIN_NAME="rolling-update"
+VERSION="1.0.0"
+PLUGIN_NAME="rollingupdate"
 
 # --- Docker CLI plugin support ------------------------------------------------
 if [ "${1:-}" = "docker-cli-plugin-metadata" ]; then
@@ -25,8 +25,12 @@ EOF
     exit 0
 fi
 # Docker passes the plugin's subcommand name as the first argument.
-if [ "$(basename "$0")" = "docker-${PLUGIN_NAME}" ] && [ "${1:-}" = "${PLUGIN_NAME}" ]; then
-    shift
+PROG="$(basename "$0")"
+if [ "$PROG" = "docker-${PLUGIN_NAME}" ]; then
+    PROG="docker ${PLUGIN_NAME}"
+    if [ "${1:-}" = "${PLUGIN_NAME}" ]; then
+        shift
+    fi
 fi
 
 # Resolve symlinks (plugin install) so check_status.sh is found next to the
@@ -46,7 +50,7 @@ SERVICES=()
 
 usage() {
     cat <<EOF
-Usage: $(basename "$0") [OPTIONS] <service> [service...]
+Usage: ${PROG} [OPTIONS] <service> [service...]
 
 Zero-downtime rolling update of Docker Compose services. Each service must
 have a healthcheck and be running.
@@ -66,8 +70,8 @@ COMPOSE_FILE, COMPOSE_PROJECT_NAME and other docker compose environment
 variables are respected as usual.
 
 Examples:
-  $(basename "$0") api worker
-  $(basename "$0") -f docker-compose.prod.yaml -p shop -t 300 api
+  ${PROG} api worker
+  ${PROG} -f docker-compose.prod.yaml -p shop -t 300 api
 EOF
 }
 

@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+#
+# e2e-test.sh — automated version of the example walkthrough.
+#
+# Builds v1 and v2, starts the stack, keeps monitor.sh running, then:
+#   1. rolls service1 and service2 from v1 to v2
+#   2. tries a broken release (BROKEN=1), which must be rolled back
+# Fails if any request fails, the broken release is accepted, or the final
+# state is wrong. Used by CI; safe to run locally (cleans up after itself).
+
+set -euo pipefail
+
+cd "$(dirname "$0")"
+UPDATE=../scripts/update.sh
+PROJECT="rolling-update-e2e"
+export COMPOSE_PROJECT_NAME="$PROJECT"
+
+LOG="$(mktemp)"
+MONITOR_PID=""
+
+cleanup() {
+    if [ -n "$MONITOR_PID" ]; then kill "$MONITOR_PID" 2>/dev/null || true; fi
+    docker compose down --remove-orphans >/dev/null 2>&1 || true
+    rm -f "$LOG"
+}
+trap cleanup EXIT
+
+fail() {
+    echo "✗ FAIL: $*" >&2
+    echo "--- monitor log (last 30 lines) ---" >&2
+    tail -n 30 "$LOG" >&2 || true
+    exit 1
+}
+
+step() { echo ""; echo "=== $* ==="; }
+
+running_count() {
+    docker compose ps -q --status running "$1" | grep -c . || true
+}
+
+step "Building images"
+docker build -q -t service:v1 . >/dev/null
+docker build -q -t service:v2 . >/dev/null
+
+step "Starting v1"
+VERSION=1 docker compose up -d --wait
+
+./monitor.sh > "$LOG" 2>&1 &
+MONITOR_PID=$!
+sleep 2
+grep -q "OK: Hello World v1" "$LOG" || fail "v1 is not serving through nginx"
+
+step "Rolling update to v2"
+VERSION=2 "$UPDATE" service1 service2
+
+step "Broken release must be rolled back"
+set +e
+BROKEN=1 VERSION=2 "$UPDATE" service1
+rc=$?
+set -e
+[ "$rc" -eq 1 ] || fail "broken release exited with $rc, expected 1"
+
+sleep 2
+kill "$MONITOR_PID"
+MONITOR_PID=""
+
+step "Checking results"
+total=$(grep -cE '^[0-9]{4}-' "$LOG" || true)
+errors=$(grep -E '^[0-9]{4}-' "$LOG" | grep -vc ' - OK: ' || true)
+last=$(grep -E ' - OK: ' "$LOG" | tail -n 1)
+
+echo "Requests: $total, failed: $errors"
+[ "$total" -gt 20 ] || fail "too few requests recorded ($total)"
+[ "$errors" -eq 0 ] || fail "$errors request(s) failed during the update"
+[[ "$last" == *"Hello World v2!"* ]] || fail "last response was not v2: $last"
+[ "$(running_count service1)" -eq 1 ] || fail "service1 should have 1 running container"
+[ "$(running_count service2)" -eq 1 ] || fail "service2 should have 1 running container"
+
+echo ""
+echo "✓ Zero-downtime rolling update verified"

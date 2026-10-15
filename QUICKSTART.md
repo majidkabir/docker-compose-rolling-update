@@ -8,7 +8,7 @@
 cp scripts/update.sh scripts/check_status.sh ./your-project-scripts/
 chmod +x ./your-project-scripts/*.sh
 
-# ...or install as a Docker CLI plugin: docker rolling-update
+# ...or install as a Docker CLI plugin: docker rollingupdate
 ./scripts/install-plugin.sh
 ```
 
