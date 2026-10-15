@@ -72,6 +72,10 @@ sleep 2
 grep -q "OK: Hello World v1" "$LOG" || fail "v1 is not serving through nginx"
 
 step "Rolling update to v2"
+if [ -n "${GITHUB_ACTIONS:-}" ]; then
+    diag="$(docker compose version; echo "images (VERSION=2):"; VERSION=2 docker compose config --images; docker image ls --format '{{.Repository}}:{{.Tag}} {{.ID}}' | grep service; echo "pull never:"; VERSION=2 docker compose up -d --pull never --no-deps --no-recreate --scale service1=2 service1 2>&1 | tail -n 5; docker compose ps -a --format '{{.Name}} {{.Image}} {{.Status}}')"
+    echo "::notice title=e2e-diag::${diag//$'\n'/'%0A'}"
+fi
 VERSION=2 run_update service1 service2
 
 step "Broken release must be rolled back"
