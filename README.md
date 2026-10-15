@@ -7,88 +7,74 @@
 
 **Zero-downtime rolling updates for Docker Compose** — deploy new versions of your services without dropping a single request. No Docker Swarm, no Kubernetes required.
 
+```bash
+./scripts/update.sh api worker      # or: docker rollingupdate api worker
+```
+
 ## Why This Exists
 
-Docker Compose does not have a built-in rolling update command. Running `docker compose up` recreates containers one by one with a brief downtime gap. `docker compose pull && docker compose up -d` replaces all containers simultaneously, causing a full restart.
+Docker Compose has no rolling update command. When a service's image changes, `docker compose up -d` stops the old container before starting the new one, so the service is down until the new one is ready — and if the new version is broken, it stays down.
 
-This project fills that gap with a simple bash script approach:
+This project fills that gap with two small bash scripts:
 
-- **No orchestrator required** — works with plain Docker Compose on any machine or VM
-- **No external dependencies** — pure bash + Docker CLI
-- **Safe by default** — health-check gating, automatic rollback on failure, scoped to your Compose project
-- **Drop-in** — copy two scripts into any existing Docker Compose project, or install as `docker rollingupdate`
+- **No orchestrator** — plain Docker Compose on any machine or VM
+- **No dependencies** — bash and the Docker CLI
+- **Safe by default** — the old version keeps serving until the new one is healthy, and a failed update rolls back automatically
+- **Drop-in** — copy the scripts into your project, or install them as `docker rollingupdate`
 
 ## How It Works
 
-For each service, the update follows three steps:
+For each service, one after the other:
 
-1. **Scale Up** — start new containers alongside the running ones (`--no-recreate` keeps the old ones alive). A service with N replicas temporarily runs 2N.
-2. **Health Check** — wait until every new container reports `healthy`
-3. **Remove Old** — stop and remove the old containers only after the new ones are confirmed healthy
+1. **Scale up** — start new containers next to the running ones (`up --no-recreate --scale`). A service with N replicas briefly runs 2N.
+2. **Wait for healthy** — every new container must report `healthy`.
+3. **Remove old** — only then are the old containers stopped and removed.
 
-If a new container turns unhealthy, crashes, has no healthcheck, or doesn't become healthy before the timeout, the script **rolls back**: it removes the new containers and the old ones keep serving. The same happens if you press Ctrl+C or the script receives SIGTERM.
-
-At no point is the service fully down. Traffic flows to the old containers until the new ones are ready.
+If a new container turns unhealthy, crashes, has no healthcheck, or isn't healthy before the timeout, the script **rolls back**: it removes the new containers, and the old ones never stopped serving. Ctrl+C or SIGTERM rolls back the same way.
 
 ```
-Initial State:
-:8182 → nginx → service1 (v1)
-                service2 (v1)    [independent service, not behind nginx]
+Updating service1 (behind nginx):
 
-Updating service1:
-:8182 → nginx → service1 (v1, old) + service1 (v2, new)
-                service2 (v1)
-                ↓ (new container passes health check)
-:8182 → nginx → service1 (v2)
-                service2 (v1)
+  before        nginx → service1 v1
+  during        nginx → service1 v1 + service1 v2 (starting → healthy)
+  after         nginx → service1 v2
 
-Updating service2:
-:8182 → nginx → service1 (v2)
-                service2 (v1, old) + service2 (v2, new)
-                ↓ (new container passes health check)
-:8182 → nginx → service1 (v2)
-                service2 (v2)
+  on failure    nginx → service1 v1        (v2 removed, v1 never stopped)
 ```
-
-## Comparison to Alternatives
-
-| | This project | Docker Swarm | Kubernetes |
-|---|---|---|---|
-| Rolling updates | ✅ | ✅ native | ✅ native |
-| Requires orchestrator | ❌ | ✅ Swarm mode | ✅ K8s cluster |
-| Works with `docker-compose.yaml` | ✅ | ❌ needs stack file | ❌ needs manifests |
-| Setup complexity | Low | Medium | High |
-| Best for | Single host / small teams | Multi-host clusters | Large-scale infra |
-
-If you are already on Docker Swarm or Kubernetes, use their native rolling update features. If you are on a single VM or a small setup using Docker Compose, this project is for you.
 
 ## Quick Start
 
-### 1. Get the Scripts
+### 1. Get the scripts
 
-Either copy both scripts into your project (they must stay in the same directory):
+Download both scripts into your project. They must stay in the same directory:
 
 ```bash
-mkdir -p scripts
-cp scripts/update.sh scripts/check_status.sh ./scripts/
-chmod +x ./scripts/*.sh
+mkdir -p scripts && cd scripts
+base=https://github.com/majidkabir/docker-compose-rolling-update/releases/latest/download
+curl -fsSL -O "$base/update.sh" -O "$base/check_status.sh"
+chmod +x update.sh check_status.sh
 ```
 
-Or install them once as a Docker CLI plugin, then use `docker rollingupdate` anywhere:
+Or clone the repository and install them once as a Docker CLI plugin, so `docker rollingupdate` works in any project:
 
 ```bash
-./scripts/install-plugin.sh
+git clone https://github.com/majidkabir/docker-compose-rolling-update.git
+./docker-compose-rolling-update/scripts/install-plugin.sh
 docker rollingupdate --help
 ```
 
-### 2. Configure Your docker-compose.yaml
+### 2. Prepare your compose file
 
-Services must have a healthcheck (in the compose file or as a `HEALTHCHECK` in the image) so the script knows when the new container is ready. The script refuses to remove old containers when it cannot verify the new ones. Set `stop_grace_period` to how long your app needs to drain requests:
+Each service you update needs:
+
+- a **healthcheck** (in the compose file, or a `HEALTHCHECK` in the image) — without one the script refuses to remove the old containers
+- **no fixed host port and no `container_name`**, because two copies run during the update — publish ports on a proxy in front instead
+- a **`stop_grace_period`** long enough to finish in-flight requests
 
 ```yaml
 services:
   api:
-    image: your-api:v1
+    image: registry.example.com/api:${API_TAG:-1.4.0}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
       interval: 5s
@@ -96,41 +82,31 @@ services:
       retries: 3
       start_period: 10s
     stop_grace_period: 15s
-
-  worker:
-    image: your-worker:v1
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
-      interval: 5s
-      timeout: 2s
-      retries: 3
-      start_period: 10s
 ```
 
-### 3. Handle SIGTERM in Your Application
+### 3. Handle SIGTERM in your application
 
-`docker stop` sends `SIGTERM` before killing a container. Your application must finish in-flight requests before exiting — otherwise the one request being handled at the moment of shutdown is dropped.
-
-Example for Node.js:
+`docker stop` sends `SIGTERM`, waits `stop_grace_period`, then kills the container. Stop accepting new connections, finish the requests in flight, then exit. In Node.js:
 
 ```js
 process.on('SIGTERM', () => {
-  server.closeIdleConnections(); // drop Nginx keep-alive pool immediately
-  server.close(() => process.exit(0)); // wait for active request to finish
+  server.closeIdleConnections();          // drop idle keep-alive connections now
+  server.close(() => process.exit(0));    // exit once active requests finish
+  setTimeout(() => process.exit(1), 10000).unref(); // never hang past the grace period
 });
 ```
 
-For other languages: Python (`signal.signal(signal.SIGTERM, ...)`), Go (`signal.NotifyContext`), Java (shutdown hooks).
+Other languages: Python `signal.signal(signal.SIGTERM, ...)`, Go `signal.NotifyContext`, Java shutdown hooks or Spring Boot's `server.shutdown=graceful`.
 
-### 4. Configure Nginx for Dynamic DNS (if using Nginx)
+### 4. Route traffic with DNS re-resolution (Nginx)
 
-A static `upstream {}` block caches backend IPs at startup and never re-resolves, causing Nginx to keep routing to removed containers. Use Docker's embedded DNS resolver with a variable in `proxy_pass` instead:
+Your proxy must notice new and removed containers. A static `upstream {}` block resolves names once at startup, so it keeps sending traffic to removed containers. Use Docker's DNS with a variable in `proxy_pass`, and retry on the next container when one disappears:
 
 ```nginx
 resolver 127.0.0.11 valid=1s ipv6=off;
 
 location / {
-    set $upstream your-service:3000;
+    set $upstream api:3000;
     proxy_pass http://$upstream;
 
     proxy_connect_timeout 500ms;
@@ -140,70 +116,51 @@ location / {
 }
 ```
 
-See [`example/nginx/nginx.conf`](example/nginx/nginx.conf) for a complete, ready-to-use configuration.
+See [`example/nginx/nginx.conf`](example/nginx/nginx.conf) for a complete configuration. Traefik's Docker provider tracks containers on its own.
 
-### 5. Run the Rolling Update
+### 5. Deploy a new version
 
-Change the image tag (or build a new image), then:
+New containers start from whatever image the compose file resolves to **at that moment**, so point it at the new version first:
 
 ```bash
-# Update multiple services in sequence
-./scripts/update.sh api worker
+# New tag: change it in the compose file, or via a variable the file reads
+API_TAG=1.5.0 ./scripts/update.sh api
 
-# Update a single service
-./scripts/update.sh api
+# Same tag pushed again (e.g. :latest): pull it, or the old local image is reused
+./scripts/update.sh --pull always api
 
-# Different compose file / project, longer timeout for slow-starting apps
-./scripts/update.sh -f docker-compose.prod.yaml -p shop -t 300 api
+# Image built locally under the same tag
+docker compose build api && ./scripts/update.sh api
+
+# Several services (one after another), another compose file, slow-starting apps
+./scripts/update.sh -f docker-compose.prod.yaml -p shop -t 300 api worker
 ```
 
-Run it from your compose project directory, or point it there with `-f` / `--project-directory`. The scripts can be called from any path.
+Run it from the compose project directory, or point it there with `-f` / `--project-directory`. A non-zero exit code means the update failed and was rolled back, so it drops straight into a deploy pipeline:
 
-## Project Structure
+```bash
+ssh deploy@server 'cd /srv/shop && API_TAG=1.5.0 ./scripts/update.sh api'
+```
 
-```
-.
-├── scripts/
-│   ├── update.sh          # Main orchestration script (also the CLI plugin)
-│   ├── check_status.sh    # Waits for containers to become healthy
-│   └── install-plugin.sh  # Installs `docker rollingupdate`
-│
-├── example/               # Complete working example: Node.js + Nginx
-│   ├── docker-compose.yaml
-│   ├── Dockerfile
-│   ├── server.js
-│   ├── nginx/
-│   │   └── nginx.conf
-│   ├── monitor.sh         # Real-time request monitoring
-│   ├── e2e-test.sh        # Automated zero-downtime test (used by CI)
-│   └── README.md
-│
-├── .github/workflows/     # ShellCheck, end-to-end test, releases
-├── CHANGELOG.md
-└── README.md              # This file
-```
+Make a tag change permanent (e.g. in `.env`); otherwise a later plain `docker compose up -d` brings the old version back.
 
 ## Requirements
 
-- Bash 3.2+ (macOS default works), Docker Engine 20.10+, Docker Compose v2 (`docker compose`)
-- Services must define a healthcheck, and its command must exist inside the container
-- Services must be running before an update, with no stopped containers left over
-- Applications must handle `SIGTERM` gracefully
+- Docker Engine with Docker Compose v2 (`docker compose`); tested with Compose v2.38 and v5
+- Bash. The scripts avoid Bash 4 features so they can run on macOS's default Bash 3.2, though CI only runs Linux
+- The service must be running before the update, with no stopped containers left over
 
-## Important Notes
+## Limitations
 
-- **Health Checks**: Define one either in `docker-compose.yaml` or as a `HEALTHCHECK` in the image — one place is enough
-- **Startup Time**: Adjust `start_period` for slower-starting services, and raise `--timeout` (default 120s) if the app needs longer to become healthy
-- **Graceful Shutdown**: Services must handle `SIGTERM` and drain in-flight requests before exiting. `docker stop` sends SIGTERM and waits for `stop_grace_period` (default 10s) before force-killing with SIGKILL. Override per run with `--stop-timeout`.
-- **Traffic before healthy**: Docker's DNS returns a new container's IP as soon as it is running, before it is healthy. Proxies that resolve via DNS (like the Nginx setup here) can send it requests during the health-check window, so the app should not accept connections until it can serve them.
-- **Resources**: During an update a service briefly runs twice its replicas, so leave headroom for memory and ports. Services that publish a fixed host port (`ports: "8080:80"`) or set `container_name` cannot run two copies — put them behind a proxy instead.
-- **Nginx DNS**: Use Docker's embedded resolver (`127.0.0.11`) with a variable in `proxy_pass`. Do **not** use `docker network disconnect` before stopping — it makes the container's IP silently unreachable (packets dropped), causing Nginx to hang on connection rather than fail fast and retry.
+- **Single host.** It updates containers on the machine where it runs.
+- **Stateless services only.** Don't use it for databases or anything that can't run two copies at once.
+- **Traffic before healthy.** Docker's DNS returns a new container as soon as it runs, before it's healthy, so a DNS-based proxy can send it requests during the health-check window. Apps should only start listening once they can serve.
+- **Twice the resources, briefly.** Each service runs 2N containers during its update.
+- **Not for the proxy itself.** Services with `container_name` or fixed host ports (like the example's nginx) can't run two copies; update those with a normal `docker compose up -d`.
 
 ## Scripts Reference
 
 ### `update.sh`
-
-Orchestrates the rolling update for one or more services.
 
 ```
 Usage: update.sh [OPTIONS] <service> [service...]
@@ -219,55 +176,70 @@ Usage: update.sh [OPTIONS] <service> [service...]
   -v, --version                Show version
 ```
 
-- Only touches containers of the given service in the given Compose project
-- Runs `docker compose up -d --no-deps --no-recreate --scale <svc>=2N <svc>`
-- Calls `check_status.sh` on the new containers, then removes the old ones
-- On failure or interrupt, removes the new containers and exits non-zero; services updated earlier in the same run stay updated
-- Respects `COMPOSE_FILE`, `COMPOSE_PROJECT_NAME`, and `HEALTHCHECK_TIMEOUT` / `STOP_TIMEOUT` environment variables
+- Only touches the named services in the current Compose project
+- Runs `docker compose up -d --no-deps --no-recreate --scale <svc>=2N <svc>`, waits with `check_status.sh`, then removes the old containers
+- Stops at the first failed service; services updated earlier in the same run stay updated
+- Reads `COMPOSE_FILE`, `COMPOSE_PROJECT_NAME`, `HEALTHCHECK_TIMEOUT` and `STOP_TIMEOUT` from the environment
 
-Exit codes: `0` success, `1` update failed (rolled back), `64` usage error, `130`/`143` interrupted (rolled back).
+Exit codes: `0` updated, `1` failed and rolled back, `64` usage error, `130` / `143` interrupted and rolled back.
 
 ### `check_status.sh`
 
-Waits until the given containers are running and healthy. Used by `update.sh`, but works on its own too.
+Waits until the given containers are running and healthy. `update.sh` uses it, and it works on its own:
 
 ```
 Usage: check_status.sh [-t TIMEOUT] <container> [container...]
 ```
 
-Exit codes: `0` all healthy, `1` unhealthy, not running, or timed out, `2` no healthcheck, `64` usage error.
+Exit codes: `0` all healthy, `1` unhealthy, not running or timed out, `2` no healthcheck, `64` usage error.
 
 ### `install-plugin.sh`
 
-Installs `update.sh` (and `check_status.sh`) into `~/.docker/cli-plugins` as `docker-rollingupdate`, so it runs as `docker rollingupdate`. `--link` symlinks instead of copying, so the plugin follows your checkout; pass a directory to install somewhere else. (Docker plugin names can't contain dashes, hence `rollingupdate`.)
+Installs the scripts into `~/.docker/cli-plugins` so `update.sh` runs as `docker rollingupdate` (Docker plugin names can't contain dashes). `--link` symlinks instead of copying, so the plugin follows your clone; pass a directory to install elsewhere, e.g. `/usr/local/lib/docker/cli-plugins` for all users.
 
 ## Troubleshooting
 
-**Health check fails immediately**
-- The script prints the last health-check output; also see `docker inspect --format '{{json .State.Health}}' <id>`
-- Confirm the health check binary exists: `docker exec <id> which curl`
-- Increase `start_period` if the app takes time to boot
+**The new containers run the old version**
+- The image didn't change. Use a new tag, pass `--pull always` when a tag was re-pushed, or rebuild before updating. `docker compose config --images` shows what Compose resolves.
+
+**Health check fails**
+- The script prints the last health-check output. More detail: `docker inspect --format '{{json .State.Health}}' <id>`
+- Check the command exists in the image, e.g. `docker exec <id> which curl`
+- Raise `start_period` if the app needs time to boot
 
 **"Timed out ... still starting"**
-- The app takes longer than `--timeout` to become healthy; raise it, e.g. `-t 300`
+- The app needs longer than `--timeout` (default 120s); raise it, e.g. `-t 300`
 
 **"has stopped containers that 'up' would restart"**
 - Remove the leftovers first: `docker compose rm -f <service>` (running containers are kept)
 
 **"pull access denied" for an image you built locally**
-- Compose couldn't find that tag locally; check the tag your compose file resolves to (`docker compose config --images`). For local-only images, `--pull never` or `pull_policy: never` gives a clearer error
+- Compose can't find that tag locally. Check `docker compose config --images`; for local-only images set `pull_policy: never` or pass `--pull never`
 
 **"Unknown service" or no containers found**
-- Run from the compose project directory, or pass `-f` / `-p` / `--project-directory` the same way you run `docker compose`
+- Run from the compose project directory, or pass the same `-f` / `-p` / `--project-directory` you use with `docker compose`
 
-**Requests fail during update (HTTP 000 or 502)**
-- Ensure Nginx uses `resolver 127.0.0.11 valid=1s` and a variable in `proxy_pass`
-- Add `proxy_next_upstream error timeout` so Nginx retries on the healthy container
-- Confirm the application handles SIGTERM and does not exit while a request is in flight
+**Requests fail during the update (HTTP 502 or connection errors)**
+- Nginx needs `resolver 127.0.0.11 valid=1s`, a variable in `proxy_pass`, and `proxy_next_upstream error timeout`
+- The app must finish in-flight requests on SIGTERM
+- Don't `docker network disconnect` containers before stopping them: packets to them are silently dropped, so Nginx waits for a timeout instead of retrying immediately
 
 ## Example
 
-See [`example/`](example/) for a complete, runnable demonstration with a Node.js server, Nginx, and a monitoring script that verifies zero-downtime behavior in real time.
+[`example/`](example/) is a runnable demo — two Node.js services behind Nginx, plus a monitor that prints every request during the update. [`example/e2e-test.sh`](example/e2e-test.sh) runs the whole demo automatically; CI uses it to check for zero failed requests on every change. For a command cheat sheet, see [QUICKSTART.md](QUICKSTART.md).
+
+## Project Structure
+
+```
+scripts/
+  update.sh           Rolling update (also the Docker CLI plugin)
+  check_status.sh     Waits for containers to become healthy
+  install-plugin.sh   Installs `docker rollingupdate`
+example/              Runnable demo: Node.js + Nginx, monitor, end-to-end test
+.github/workflows/    ShellCheck, end-to-end test, releases
+QUICKSTART.md         Command cheat sheet
+CHANGELOG.md          Release notes
+```
 
 ## License
 
