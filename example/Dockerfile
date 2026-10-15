@@ -1,6 +1,9 @@
 FROM node:20-alpine
 
-ENV NODE_ENV=production
+# The version the server reports: docker build --build-arg VERSION=2 -t service:v2 .
+ARG VERSION=1
+ENV NODE_ENV=production \
+    VERSION=${VERSION}
 WORKDIR /app
 
 COPY --chown=node:node server.js .

@@ -1,10 +1,9 @@
 # Settings shared by both example services.
-# VERSION picks the image tag and the version the server reports, so an update
-# is just: VERSION=2 ../scripts/update.sh service1 service2
+# VERSION picks the image tag (the image itself knows its version), so an
+# update is just: VERSION=2 ../scripts/update.sh service1 service2
 x-service: &service
   image: service:v${VERSION:-1}
   environment:
-    - VERSION=${VERSION:-1}
     - BROKEN=${BROKEN:-0}   # BROKEN=1 simulates a release that crashes on start
   healthcheck:
     # Uses node itself, so the image needs no curl.

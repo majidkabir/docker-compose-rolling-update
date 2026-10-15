@@ -60,12 +60,8 @@ running_count() {
 }
 
 step "Building images"
-docker build -q -t service:v1 . >/dev/null
-docker build -q -t service:v2 . >/dev/null
-if [ -n "${GITHUB_ACTIONS:-}" ]; then
-    msg="$(docker version --format 'server {{.Server.Version}}'; docker buildx ls 2>&1 | head -5; docker image ls --format '{{.Repository}}:{{.Tag}} {{.ID}}' | grep service; docker image inspect service:v2 --format '{{.Id}}' 2>&1)"
-    echo "::notice title=e2e-images::${msg//$'\n'/'%0A'}"
-fi
+docker build -q --build-arg VERSION=1 -t service:v1 . >/dev/null
+docker build -q --build-arg VERSION=2 -t service:v2 . >/dev/null
 
 step "Starting v1"
 VERSION=1 docker compose up -d --wait

@@ -69,10 +69,10 @@ The monitor script continuously sends requests and shows:
 ### Create Version 2 Image
 
 ```bash
-docker build -t service:v2 .
+docker build --build-arg VERSION=2 -t service:v2 .
 ```
 
-The compose file reads the `VERSION` variable for both the image tag (`service:v${VERSION}`) and the version the server reports, so there is nothing to edit.
+The build arg is baked into the image, so `service:v2` reports v2. The compose file picks the image tag from the `VERSION` variable (`service:v${VERSION}`), so there is nothing to edit.
 
 ### Run the Rolling Update Script
 

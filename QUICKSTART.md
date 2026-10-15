@@ -95,7 +95,7 @@ docker compose up -d --wait
 # Should see: OK: Hello World v1!
 
 # 4. Build version 2
-docker build -t service:v2 .
+docker build --build-arg VERSION=2 -t service:v2 .
 
 # 5. Run rolling update (VERSION=2 selects service:v2)
 VERSION=2 ../scripts/update.sh service1 service2
