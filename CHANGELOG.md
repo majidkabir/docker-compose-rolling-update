@@ -36,7 +36,7 @@ First tagged release. Compared with the earlier untagged scripts:
 - Automatic rollback when new containers are unhealthy, crash, time out, or the
   script is interrupted (Ctrl+C / SIGTERM).
 - Options `-f`, `-p`, `--project-directory`, `-t/--timeout`, `--stop-timeout`,
-  `--help`, `--version`; service names are validated up front.
+  `--pull`, `--help`, `--version`; service names are validated up front.
 - Services with more than one replica are supported (N → 2N → N).
 - Docker CLI plugin: `docker rollingupdate`, installed with `scripts/install-plugin.sh`.
 - CI: ShellCheck and an end-to-end zero-downtime test; tag-based release workflow.

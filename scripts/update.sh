@@ -45,6 +45,7 @@ CHECK_STATUS="${SCRIPT_DIR}/check_status.sh"
 # --- Settings -----------------------------------------------------------------
 TIMEOUT="${HEALTHCHECK_TIMEOUT:-120}"
 STOP_TIMEOUT="${STOP_TIMEOUT:-}"
+PULL=""
 COMPOSE=(docker compose)
 SERVICES=()
 
@@ -63,6 +64,8 @@ Options:
                                (default: ${TIMEOUT}, env HEALTHCHECK_TIMEOUT)
       --stop-timeout SECONDS   Grace period when stopping old containers
                                (default: the service's stop_grace_period)
+      --pull POLICY            Pull policy for new containers: always, missing,
+                               never (default: the service's pull_policy)
   -h, --help                   Show this help
   -v, --version                Show version
 
@@ -101,6 +104,8 @@ while [ $# -gt 0 ]; do
         --timeout=*)          TIMEOUT="${1#*=}"; shift ;;
         --stop-timeout)       need_value "$1" $#; STOP_TIMEOUT="$2"; shift 2 ;;
         --stop-timeout=*)     STOP_TIMEOUT="${1#*=}"; shift ;;
+        --pull)               need_value "$1" $#; PULL="$2"; shift 2 ;;
+        --pull=*)             PULL="${1#*=}"; shift ;;
         -h|--help)            usage; exit 0 ;;
         -v|--version)         echo "docker-compose-rolling-update ${VERSION}"; exit 0 ;;
         --)                   shift; while [ $# -gt 0 ]; do SERVICES+=("$1"); shift; done ;;
@@ -122,6 +127,10 @@ if [ -n "$STOP_TIMEOUT" ] && ! is_number "$STOP_TIMEOUT"; then
     err "--stop-timeout must be a whole number of seconds, got: $STOP_TIMEOUT"
     exit 64
 fi
+case "$PULL" in
+    ""|always|missing|never) ;;
+    *) err "--pull must be always, missing or never, got: $PULL"; exit 64 ;;
+esac
 if [ ! -x "$CHECK_STATUS" ]; then
     err "Cannot find executable check_status.sh next to this script ($CHECK_STATUS)"
     exit 1
@@ -231,7 +240,11 @@ rollout() {
 
     local target=$((count * 2))
     log "   [1/3] Starting $count new container(s) next to $count running (scale $count → $target)..."
-    if ! "${COMPOSE[@]}" up -d --no-deps --no-recreate --scale "${service}=${target}" "$service"; then
+    local up_args=(up -d --no-deps --no-recreate --scale "${service}=${target}")
+    if [ -n "$PULL" ]; then
+        up_args+=(--pull "$PULL")
+    fi
+    if ! "${COMPOSE[@]}" "${up_args[@]}" "$service"; then
         err "docker compose up failed for $service"
         # Still clean up anything that did get created.
     fi

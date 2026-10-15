@@ -3,6 +3,8 @@
 # update is just: VERSION=2 ../scripts/update.sh service1 service2
 x-service: &service
   image: service:v${VERSION:-1}
+  # Images are built locally; never try to pull them from a registry.
+  pull_policy: never
   environment:
     - BROKEN=${BROKEN:-0}   # BROKEN=1 simulates a release that crashes on start
   healthcheck:

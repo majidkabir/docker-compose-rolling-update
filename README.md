@@ -214,6 +214,7 @@ Usage: update.sh [OPTIONS] <service> [service...]
   -t, --timeout SECONDS        Max wait for new containers to become healthy (default: 120)
       --stop-timeout SECONDS   Grace period when stopping old containers
                                (default: the service's stop_grace_period)
+      --pull POLICY            always | missing | never (default: the service's pull_policy)
   -h, --help                   Show help
   -v, --version                Show version
 ```
@@ -252,6 +253,9 @@ Installs `update.sh` (and `check_status.sh`) into `~/.docker/cli-plugins` as `do
 
 **"has stopped containers that 'up' would restart"**
 - Remove the leftovers first: `docker compose rm -f <service>` (running containers are kept)
+
+**"pull access denied" for an image you built locally**
+- Some Compose releases (seen with v2.38) try to pull even when the tag exists locally. Pass `--pull never`, or set `pull_policy: never` on locally built services
 
 **"Unknown service" or no containers found**
 - Run from the compose project directory, or pass `-f` / `-p` / `--project-directory` the same way you run `docker compose`
