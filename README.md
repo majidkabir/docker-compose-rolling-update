@@ -255,7 +255,7 @@ Installs `update.sh` (and `check_status.sh`) into `~/.docker/cli-plugins` as `do
 - Remove the leftovers first: `docker compose rm -f <service>` (running containers are kept)
 
 **"pull access denied" for an image you built locally**
-- Some Compose releases (seen with v2.38) try to pull even when the tag exists locally. Pass `--pull never`, or set `pull_policy: never` on locally built services
+- Compose couldn't find that tag locally; check the tag your compose file resolves to (`docker compose config --images`). For local-only images, `--pull never` or `pull_policy: never` gives a clearer error
 
 **"Unknown service" or no containers found**
 - Run from the compose project directory, or pass `-f` / `-p` / `--project-directory` the same way you run `docker compose`

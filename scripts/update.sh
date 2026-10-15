@@ -14,13 +14,13 @@
 
 set -euo pipefail
 
-VERSION="1.0.0"
+RU_VERSION="1.0.0"   # not "VERSION": that would clobber a VERSION the caller exports for compose
 PLUGIN_NAME="rollingupdate"
 
 # --- Docker CLI plugin support ------------------------------------------------
 if [ "${1:-}" = "docker-cli-plugin-metadata" ]; then
     cat <<EOF
-{"SchemaVersion":"0.1.0","Vendor":"majidkabir","Version":"${VERSION}","ShortDescription":"Zero-downtime rolling updates for Docker Compose services","URL":"https://github.com/majidkabir/docker-compose-rolling-update"}
+{"SchemaVersion":"0.1.0","Vendor":"majidkabir","Version":"${RU_VERSION}","ShortDescription":"Zero-downtime rolling updates for Docker Compose services","URL":"https://github.com/majidkabir/docker-compose-rolling-update"}
 EOF
     exit 0
 fi
@@ -107,7 +107,7 @@ while [ $# -gt 0 ]; do
         --pull)               need_value "$1" $#; PULL="$2"; shift 2 ;;
         --pull=*)             PULL="${1#*=}"; shift ;;
         -h|--help)            usage; exit 0 ;;
-        -v|--version)         echo "docker-compose-rolling-update ${VERSION}"; exit 0 ;;
+        -v|--version)         echo "docker-compose-rolling-update ${RU_VERSION}"; exit 0 ;;
         --)                   shift; while [ $# -gt 0 ]; do SERVICES+=("$1"); shift; done ;;
         -*)                   err "Unknown option: $1"; usage >&2; exit 64 ;;
         *)                    SERVICES+=("$1"); shift ;;

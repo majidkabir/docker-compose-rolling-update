@@ -15,9 +15,9 @@ jobs:
 
       - name: Check tag matches script version
         run: |
-          script_version=$(sed -n 's/^VERSION="\(.*\)"/\1/p' scripts/update.sh)
+          script_version=$(sed -n 's/^RU_VERSION="\([^"]*\)".*/\1/p' scripts/update.sh)
           if [ "v${script_version}" != "${GITHUB_REF_NAME}" ]; then
-            echo "Tag ${GITHUB_REF_NAME} does not match VERSION=\"${script_version}\" in scripts/update.sh"
+            echo "Tag ${GITHUB_REF_NAME} does not match RU_VERSION=\"${script_version}\" in scripts/update.sh"
             exit 1
           fi
 

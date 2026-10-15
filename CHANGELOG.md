@@ -4,7 +4,7 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project uses [Semantic Versioning](https://semver.org/).
 
-To release: update `VERSION` in `scripts/update.sh`, move the "Unreleased"
+To release: update `RU_VERSION` in `scripts/update.sh`, move the "Unreleased"
 notes under a new version heading, then push a matching tag (`git tag v1.0.0 &&
 git push origin v1.0.0`). The release workflow publishes the scripts.
 
