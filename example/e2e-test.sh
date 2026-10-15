@@ -8,7 +8,7 @@
 # Fails if any request fails, the broken release is accepted, or the final
 # state is wrong. Used by CI; safe to run locally (cleans up after itself).
 
-set -euo pipefail
+set -Eeuo pipefail
 
 cd "$(dirname "$0")"
 UPDATE=../scripts/update.sh
