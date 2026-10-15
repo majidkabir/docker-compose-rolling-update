@@ -25,12 +25,27 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# In GitHub Actions, also emit an annotation so the reason shows on the PR.
+annotate() {
+    if [ -n "${GITHUB_ACTIONS:-}" ]; then
+        local msg="$1"
+        msg="${msg//'%'/'%25'}"; msg="${msg//$'\n'/'%0A'}"; msg="${msg//$'\r'/'%0D'}"
+        echo "::error title=e2e-test::${msg}"
+    fi
+}
+
 fail() {
     echo "✗ FAIL: $*" >&2
     echo "--- monitor log (last 30 lines) ---" >&2
     tail -n 30 "$LOG" >&2 || true
+    annotate "$*"$'\n'"--- monitor log (failures) ---"$'\n'"$(grep -E '^[0-9]{4}-' "$LOG" | grep -v ' - OK: ' | head -n 15)"$'\n'"--- containers ---"$'\n'"$(docker compose ps -a 2>&1)"
     exit 1
 }
+
+on_error() {
+    annotate "Command failed (exit $1) at line $2: $3"$'\n'"$(docker compose ps -a 2>&1)"$'\n'"$(docker compose logs --tail 20 2>&1 | tail -n 40)"
+}
+trap 'on_error $? $LINENO "$BASH_COMMAND"' ERR
 
 step() { echo ""; echo "=== $* ==="; }
 
@@ -54,10 +69,7 @@ step "Rolling update to v2"
 VERSION=2 "$UPDATE" service1 service2
 
 step "Broken release must be rolled back"
-set +e
-BROKEN=1 VERSION=2 "$UPDATE" service1
-rc=$?
-set -e
+if BROKEN=1 VERSION=2 "$UPDATE" service1; then rc=0; else rc=$?; fi
 [ "$rc" -eq 1 ] || fail "broken release exited with $rc, expected 1"
 
 sleep 2
