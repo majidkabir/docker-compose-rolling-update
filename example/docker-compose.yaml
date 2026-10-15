@@ -1,42 +1,45 @@
-version: '3.8'
+# Settings shared by both example services.
+# VERSION picks the image tag and the version the server reports, so an update
+# is just: VERSION=2 ../scripts/update.sh service1 service2
+x-service: &service
+  image: service:v${VERSION:-1}
+  environment:
+    - VERSION=${VERSION:-1}
+    - BROKEN=${BROKEN:-0}   # BROKEN=1 simulates a release that crashes on start
+  healthcheck:
+    # Uses node itself, so the image needs no curl.
+    test:
+      - CMD
+      - node
+      - -e
+      - "require('http').get('http://localhost:3000/', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"
+    interval: 5s
+    timeout: 2s
+    retries: 3
+    start_period: 5s
+  # Longer than server.js's forced-exit timer, so in-flight requests finish
+  # before Docker sends SIGKILL.
+  stop_grace_period: 15s
+  networks:
+    - app-network
 
 services:
   service1:
-    image: service:v1
-    environment:
-      - VERSION=1
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/"]
-      interval: 5s
-      timeout: 2s
-      retries: 3
-      start_period: 5s
-    networks:
-      - app-network
+    <<: *service
 
   service2:
-    image: service:v1
-    environment:
-      - VERSION=1
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/"]
-      interval: 5s
-      timeout: 2s
-      retries: 3
-      start_period: 5s
-    networks:
-      - app-network
+    <<: *service
 
   nginx:
     container_name: nginx
-    image: nginx:latest
+    image: nginx:1.27-alpine
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
     ports:
       - "8182:80"
     depends_on:
-      - service1
-      - service2
+      service1:
+        condition: service_healthy
     networks:
       - app-network
 

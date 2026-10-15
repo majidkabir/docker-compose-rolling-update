@@ -1,6 +1,3 @@
-# Docker
-.dockerignore
-
 # Environment
 .env
 .env.local

@@ -1,0 +1,3 @@
+# Only server.js is needed in the image.
+*
+!server.js
