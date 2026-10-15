@@ -13,11 +13,12 @@ This directory contains a complete, working example of zero-downtime rolling upd
 
 ## Files
 
-- `docker-compose.yaml` - Service definitions with health checks
-- `Dockerfile` - Node.js server with curl for health checks
-- `server.js` - Simple version-aware HTTP server
+- `docker-compose.yaml` - Service definitions with health checks; `VERSION` selects the image tag
+- `Dockerfile` - Node.js server running as the unprivileged `node` user
+- `server.js` - Simple version-aware HTTP server with graceful shutdown
 - `nginx/nginx.conf` - Nginx reverse proxy configuration for `service1`
 - `monitor.sh` - Real-time monitoring of requests
+- `e2e-test.sh` - Runs the whole walkthrough automatically and fails on any dropped request (used by CI)
 
 ## Prerequisites
 
@@ -38,7 +39,7 @@ docker images | grep service
 
 ```bash
 cd example/
-docker compose up -d
+docker compose up -d --wait
 
 # Check status
 docker compose ps
@@ -67,40 +68,23 @@ The monitor script continuously sends requests and shows:
 
 ### Create Version 2 Image
 
-Edit `server.js` to see the change, or just build a new image:
-
 ```bash
-# Modify server.js if you want to see the version change
-docker build -t service:v2 .
+docker build --build-arg VERSION=2 -t service:v2 .
 ```
 
-### Update docker-compose.yaml
-
-Change both services to use the new image and bump the VERSION env var:
-
-```yaml
-services:
-  service1:
-    image: service:v2
-    environment:
-      - VERSION=2
-  service2:
-    image: service:v2
-    environment:
-      - VERSION=2
-```
+The build arg is baked into the image, so `service:v2` reports v2. The compose file picks the image tag from the `VERSION` variable (`service:v${VERSION}`), so there is nothing to edit.
 
 ### Run the Rolling Update Script
 
 ```bash
 # From the example directory — updates service1 first, then service2 independently
-../scripts/update.sh service1 service2
+VERSION=2 ../scripts/update.sh service1 service2
 
 # Watch the monitor.sh output for zero-downtime behavior
 ```
 
 The script updates each service independently and sequentially:
-1. `service1` is scaled to 2 containers (old + new), new one is health-checked, old one removed
+1. `service1` is scaled to 2 containers (old + new), the new one must report `healthy`, then the old one is removed
 2. `service2` goes through the same process
 
 Expected behavior in `monitor.sh`:
@@ -108,26 +92,20 @@ Expected behavior in `monitor.sh`:
 - ✓ Responses may briefly alternate between v1 and v2 while both `service1` containers are alive
 - ✓ Eventually all responses show v2
 
-## Step 5: Test Unhealthy Container Handling
+## Step 5: Test a Broken Release
 
-Update docker-compose.yaml with an unhealthy image:
-
-```yaml
-services:
-  service1:
-    image: service:unhealthy  # Some broken version
-```
-
-Run the update script:
+`BROKEN=1` makes the new container crash on startup, like a bad release would:
 
 ```bash
-../scripts/update.sh service1
+BROKEN=1 VERSION=2 ../scripts/update.sh service1
 ```
 
 The script will:
-1. Detect the unhealthy container
-2. Remove it
-3. Report the failure
+1. Detect that the new container is not running (an `unhealthy` one is caught the same way)
+2. Roll back by removing it
+3. Exit with code 1 — the old container never stopped, so `monitor.sh` shows no errors
+
+Containers without a healthcheck, or that stay `starting` past `--timeout`, are rolled back too.
 
 ## Monitoring Output Explanation
 
@@ -143,32 +121,29 @@ During a successful rolling update, you should see **no failures**.
 
 ```bash
 docker compose down
-docker rmi service:v1 service:v2 service:unhealthy 2>/dev/null
+docker rmi service:v1 service:v2 2>/dev/null
 ```
 
 ## Key Concepts
 
 ### Health Checks
 
-Health checks are defined in both places:
+The health check is defined once, in `docker-compose.yaml`. It uses `node` itself, so the image doesn't need `curl`:
 
-**docker-compose.yaml**:
 ```yaml
 healthcheck:
-  test: ["CMD", "curl", "-f", "http://localhost:3000/"]
+  test:
+    - CMD
+    - node
+    - -e
+    - "require('http').get('http://localhost:3000/', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"
   interval: 5s
   timeout: 2s
   retries: 3
   start_period: 5s
 ```
 
-**Dockerfile**:
-```dockerfile
-HEALTHCHECK --interval=5s --timeout=2s --retries=3 --start-period=5s \
-    CMD curl -f http://localhost:3000/ || exit 1
-```
-
-Both must be defined for Docker to monitor container health.
+A `HEALTHCHECK` in the Dockerfile works just as well — one of the two is enough.
 
 ### Load Balancing & Dynamic DNS
 
@@ -205,10 +180,13 @@ process.on('SIGTERM', () => {
   server.close(() => {           // wait for in-flight request to finish
     process.exit(0);
   });
+  setTimeout(() => process.exit(1), 10000).unref(); // don't hang forever
 });
 ```
 
 Without `closeIdleConnections()`, Nginx may reuse a stale keep-alive connection to the stopping container and receive a TCP reset, which reaches the client as `HTTP 000`.
+
+The forced-exit timer (10s) is shorter than the service's `stop_grace_period` (15s), so the app exits on its own terms before Docker sends SIGKILL.
 
 ### Service Scaling
 
@@ -216,14 +194,14 @@ Each independent service is temporarily scaled to 2 during its update window:
 
 ```bash
 # Step 1: scale service1 to 2 (old instance stays alive)
-docker compose up -d --scale service1=2 --no-recreate
+docker compose up -d --no-deps --no-recreate --scale service1=2 service1
 # Running: service1 (v1, old) + service1 (v2, new) + service2 (v1, untouched)
 
 # Step 2: once service1's new container is healthy, old one is removed
 # Running: service1 (v2) + service2 (v1, untouched)
 
 # Step 3: repeat for service2
-docker compose up -d --scale service2=2 --no-recreate
+docker compose up -d --no-deps --no-recreate --scale service2=2 service2
 # Running: service1 (v2) + service2 (v1, old) + service2 (v2, new)
 # After health check: service1 (v2) + service2 (v2)
 ```
@@ -233,8 +211,8 @@ At no point is any service fully down — the old container keeps serving traffi
 ## Troubleshooting
 
 **Health check reports unhealthy**:
-- Ensure curl is installed: `docker exec <container> curl -f http://localhost:3000/`
-- Check server is actually listening: `docker exec <container> netstat -tuln | grep 3000`
+- The update script prints the last health-check output
+- Check the server is listening: `docker compose logs service1`
 
 **Nginx returns 502 Bad Gateway**:
 - Check service DNS resolution: `docker exec nginx getent hosts service1`
