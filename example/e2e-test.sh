@@ -96,3 +96,6 @@ echo "Requests: $total, failed: $errors"
 
 echo ""
 echo "✓ Zero-downtime rolling update verified"
+if [ -n "${GITHUB_ACTIONS:-}" ]; then
+    echo "::notice title=e2e-test::Zero downtime verified: ${total} requests, ${errors} failed; v1 to v2 rolled out, broken release rolled back"
+fi
